@@ -1,158 +1,199 @@
+// 页面层：组装资料、判断与本机保存，渲染练习跟进台
+import { useMemo, useState } from "react";
 import "./styles.css";
+import type { PracticePlan, PracticeState } from "./data/types";
+import {
+  adjustPlan,
+  followUpList,
+  pendingDiscussions,
+  registerPlan,
+  resolveDiscussion,
+  submitLog,
+} from "./domain/practice";
+import type { LogInput, PlanInput, Result } from "./domain/practice";
+import { todayISO } from "./domain/dates";
+import { loadState, resetState, saveState } from "./storage/localStore";
+import { CaseCard } from "./ui/CaseCard";
+import { AdjustForm, LogForm, Modal, PlanForm } from "./ui/forms";
+import { DiscussionPanel, FollowUpPanel } from "./ui/panels";
 
 const project = {
-  "id": "hxwl-12",
-  "port": 5112,
-  "title": "心理咨询个案记录",
-  "subtitle": "会谈时间线、风险等级与干预目标记录",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#7c3aed",
-    "#0f766e",
-    "#f59e0b"
-  ],
-  "domain": "心理咨询",
-  "users": [
-    "咨询师",
-    "督导",
-    "机构管理员"
-  ],
-  "metrics": [
-    "活跃个案",
-    "高风险关注",
-    "本周会谈",
-    "目标推进"
-  ],
-  "filters": [
-    "焦虑",
-    "亲密关系",
-    "亲子",
-    "职业压力"
-  ],
-  "fields": [
-    "来访者代号",
-    "咨询主题",
-    "会谈日期",
-    "主要困扰",
-    "情绪状态",
-    "干预方法",
-    "下次目标"
-  ],
-  "records": [
-    [
-      "C-042",
-      "焦虑",
-      "中风险",
-      "睡眠改善，练习呼吸放松"
-    ],
-    [
-      "C-119",
-      "亲密关系",
-      "稳定",
-      "识别沟通中的回避模式"
-    ],
-    [
-      "C-203",
-      "职业压力",
-      "关注",
-      "设定下周边界练习"
-    ]
-  ]
+  id: "hxwl-12",
+  port: 5112,
+  title: "心理咨询个案记录 · 练习跟进台",
+  subtitle:
+    "替代纸卡的家庭练习跟进：登记练习说明与核查日，按天收集分钟数、难度和卡点，未达标自动进入待讨论，连续漏交进入回访名单。",
 };
 
-const statusColors = ["status-ok", "status-watch", "status-danger"];
+type FormRequest =
+  | { kind: "log"; plan: PracticePlan; date?: string }
+  | { kind: "plan"; caseId: string }
+  | { kind: "adjust"; plan: PracticePlan };
 
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
+function MetricCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: string;
+}) {
   return (
     <article className="metric-card">
       <span>{label}</span>
       <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
+      <i className={tone} />
     </article>
   );
 }
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const [state, setState] = useState<PracticeState>(() => loadState());
+  const [form, setForm] = useState<FormRequest | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const today = todayISO();
+
+  const pending = useMemo(() => pendingDiscussions(state), [state]);
+  const followUps = useMemo(() => followUpList(state, today), [state, today]);
+  const activePlans = state.plans.filter(
+    (p) => p.startDate <= today && today < p.checkDate
+  );
+  const submittedToday = state.logs.filter((l) => l.date === today).length;
+
+  function apply<T>(result: Result<T>, success: string): boolean {
+    if (!result.ok) {
+      setFormError(result.error);
+      return false;
+    }
+    setState(result.state);
+    saveState(result.state);
+    setForm(null);
+    setFormError(null);
+    setNotice(success);
+    return true;
+  }
+
+  function openForm(next: FormRequest) {
+    setFormError(null);
+    setForm(next);
+  }
+
+  const metrics = [
+    { label: "进行中练习", value: String(activePlans.length), tone: "status-ok" },
+    { label: "待讨论", value: String(pending.length), tone: "status-watch" },
+    { label: "回访名单", value: String(followUps.length), tone: "status-danger" },
+    {
+      label: "今日已提交",
+      value: `${submittedToday}/${activePlans.length}`,
+      tone: "status-ok",
+    },
+  ];
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
+          <p className="eyebrow">
+            {project.id} · port {project.port}
+          </p>
           <h1>{project.title}</h1>
           <p className="subtitle">{project.subtitle}</p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>本机保存</span>
+          <strong>数据保存在本机浏览器（localStorage），刷新不丢失</strong>
+          <button
+            type="button"
+            onClick={() => {
+              setState(resetState());
+              setNotice("已重置为演示数据");
+            }}
+          >
+            重置演示数据
+          </button>
         </div>
       </section>
 
+      {notice && (
+        <p className="notice" onClick={() => setNotice(null)}>
+          {notice}（点击关闭）
+        </p>
+      )}
+
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+        {metrics.map((m) => (
+          <MetricCard key={m.label} label={m.label} value={m.value} tone={m.tone} />
         ))}
       </section>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
+      <section className="board-grid">
+        <div className="case-list">
+          {state.cases.map((caseInfo) => (
+            <CaseCard
+              key={caseInfo.id}
+              state={state}
+              caseInfo={caseInfo}
+              today={today}
+              onLog={(plan, date) => openForm({ kind: "log", plan, date })}
+              onRegister={(caseId) => openForm({ kind: "plan", caseId })}
+              onAdjust={(plan) => openForm({ kind: "adjust", plan })}
+            />
           ))}
         </div>
+
+        <aside className="side-panels">
+          <DiscussionPanel
+            state={state}
+            logs={pending}
+            onResolve={(logId, note) =>
+              apply(resolveDiscussion(state, logId, note, new Date()), "已标记为已讨论")
+            }
+          />
+          <FollowUpPanel entries={followUps} cases={state.cases} />
+        </aside>
       </section>
+
+      {form?.kind === "log" && (
+        <Modal title={`提交练习 · ${form.plan.caseId}`} onClose={() => setForm(null)}>
+          <LogForm
+            plan={form.plan}
+            initialDate={form.date}
+            error={formError}
+            onSubmit={(input: LogInput) =>
+              apply(submitLog(state, input, new Date()), "已提交当日练习")
+            }
+          />
+        </Modal>
+      )}
+
+      {form?.kind === "plan" && (
+        <Modal title={`登记新练习 · ${form.caseId}`} onClose={() => setForm(null)}>
+          <PlanForm
+            caseId={form.caseId}
+            error={formError}
+            onSubmit={(input: PlanInput) =>
+              apply(registerPlan(state, input, new Date()), "已登记新练习")
+            }
+          />
+        </Modal>
+      )}
+
+      {form?.kind === "adjust" && (
+        <Modal title={`调整练习 · ${form.plan.caseId}`} onClose={() => setForm(null)}>
+          <AdjustForm
+            plan={form.plan}
+            error={formError}
+            onSubmit={(patch, reason) =>
+              apply(
+                adjustPlan(state, form.plan.id, patch, reason, new Date()),
+                "已保存调整，原内容与原因已留痕"
+              )
+            }
+          />
+        </Modal>
+      )}
     </main>
   );
 }
